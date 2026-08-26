@@ -1,0 +1,73 @@
+#jobpipe-banner {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 2147483647;
+  max-width: 420px;
+  padding: 12px 14px;
+  border: 1px solid #c2c9d2;
+  border-left: 3px solid #17914c;
+  border-radius: 4px;
+  background: #fbfcfd;
+  color: #14171c;
+  font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+  box-shadow: 0 2px 4px rgba(20, 23, 28, .08), 0 12px 28px -12px rgba(20, 23, 28, .3);
+}
+
+#jobpipe-banner .jp-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#jobpipe-banner strong { font-weight: 600; }
+
+#jobpipe-banner #jp-close {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: #616a77;
+  padding: 0 2px;
+}
+
+#jobpipe-banner #jp-close:hover { color: #14171c; }
+
+#jobpipe-banner .jp-note {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #d9dee4;
+  color: #4e5765;
+}
+
+#jobpipe-banner .jp-dim { color: #616a77; }
+
+#jobpipe-banner em {
+  font-style: normal;
+  font-weight: 600;
+  color: #bb1240;
+}
+
+#jobpipe-banner code {
+  display: block;
+  margin-top: 4px;
+  font: 11px/1.4 "Cascadia Mono", Consolas, monospace;
+  word-break: break-all;
+  color: #14171c;
+}
+
+@media (prefers-color-scheme: dark) {
+  #jobpipe-banner {
+    background: #1f222a;
+    color: #e7eaef;
+    border-color: #333844;
+  }
+  #jobpipe-banner .jp-note { border-top-color: #333844; color: #a9b2bf; }
+  #jobpipe-banner .jp-dim { color: #828b98; }
+  #jobpipe-banner code { color: #e7eaef; }
+  #jobpipe-banner #jp-close { color: #a9b2bf; }
+  #jobpipe-banner #jp-close:hover { color: #e7eaef; }
+}

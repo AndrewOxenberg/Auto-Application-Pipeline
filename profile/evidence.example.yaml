@@ -1,0 +1,112 @@
+# Copy this to evidence.yaml and replace it with your own record.
+#
+#   cp profile/evidence.example.yaml profile/evidence.yaml
+#
+# Every accomplishment you have, as an atomic, tagged, verifiable record. This
+# is the file that makes generated material safe: scoring and resume tailoring
+# may only cite an `id` that exists here, so a claim with no record behind it
+# cannot reach a document you send under your own name.
+#
+# Rules for writing entries:
+#   - One accomplishment per record. If it needs "and", it is probably two.
+#   - `claim` is the sentence that could appear on a resume, as written.
+#   - `verified: true` means you can walk an interviewer through it line by
+#     line. If you cannot, it does not belong here.
+#   - `tags` drive resume-variant selection, so use them consistently.
+#   - Numbers belong in `metrics` as well as the prose, so tailoring can
+#     surface them without inventing them.
+
+- id: example-realtime-system
+  org: Personal Project
+  role: Lead Developer
+  period: "2026-01 – present"
+  tags: [systems, python, realtime, testing, backend]
+  claim: >
+    Built a real-time data pipeline in Python and FastAPI ingesting 50-80
+    events per second across 100+ tracked sources, growing it to 300+ passing
+    tests across 20+ shipped features.
+  metrics:
+    events_per_sec: "50-80"
+    sources: "100+"
+    tests: "300+"
+  verified: true
+
+- id: example-analysis
+  org: Example Internship
+  role: Data Analyst Intern
+  period: "2026-06 – 2026-08"
+  tags: [data, sql, analytics]
+  claim: >
+    Wrote SQL using CTEs and window functions to segment customer records
+    across 15+ campaigns, surfacing prior-purchase context for each account.
+  metrics:
+    campaigns: "15+"
+  verified: true
+
+- id: example-ownership
+  org: Example Research Lab
+  role: Student Researcher
+  period: "2025-05 – 2025-08"
+  tags: [systems, ownership, testing]
+  claim: >
+    Owned a tool end to end - requirements, architecture, implementation and
+    testing - supporting an internal standard used across three teams.
+  metrics: {}
+  verified: true
+
+- id: example-algorithm
+  org: Example Research Lab
+  role: Student Researcher
+  period: "2025-05 – 2025-08"
+  tags: [systems, algorithms, typescript]
+  claim: >
+    Implemented depth-first search with cycle detection to resolve circular
+    references in a schema dependency graph, preventing infinite traversal in
+    nested type hierarchies.
+  metrics: {}
+  verified: true
+
+- id: example-leadership
+  org: Example Student Organisation
+  role: President
+  period: "2025-03 – 2025-12"
+  tags: [leadership, communication, mentorship]
+  claim: >
+    Led a 40-member student organisation for ten months, mediating conflicts
+    and running a mentorship programme.
+  metrics:
+    members: "40"
+  verified: true
+
+# Skills live here too, so the validator can ground "I know X" claims.
+- id: skills-languages
+  org: null
+  role: null
+  period: null
+  tags: [skills]
+  claim: >
+    Languages: Python, Java, SQL, TypeScript, JavaScript, C, C++, Rust.
+  metrics: {}
+  verified: true
+
+- id: skills-tools
+  org: null
+  role: null
+  period: null
+  tags: [skills]
+  claim: >
+    Tools: Git, Linux, Pandas, Excel, Visual Studio Code.
+  metrics: {}
+  verified: true
+
+- id: education
+  org: Example State University
+  role: null
+  period: "expected 2027-05"
+  tags: [education]
+  claim: >
+    B.S. Computer Science, Example State University. GPA 3.50. Expected
+    graduation May 2027.
+  metrics:
+    gpa: "3.50"
+  verified: true

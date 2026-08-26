@@ -1,0 +1,30 @@
+# --- personal data. Never commit these. -------------------------------------
+# The example versions of each are committed; these are yours.
+profile/facts.yaml
+profile/evidence.yaml
+profile/narratives.md
+profile/variants/*
+!profile/variants/.gitkeep
+
+# Your job database: postings, your notes, your triage decisions.
+data/
+
+# Generated from the GitHub lists by `jobs bootstrap`. It is your target list,
+# so it is yours to build rather than inherit.
+config/companies.yaml
+
+# --- environment ------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+out/
+.DS_Store
+Thumbs.db
+
+# --- editors ----------------------------------------------------------------
+.idea/
+.vscode/
+*.swp

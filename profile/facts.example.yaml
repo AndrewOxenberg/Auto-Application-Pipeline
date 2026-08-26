@@ -1,0 +1,115 @@
+# Copy this to facts.yaml and fill it in. facts.yaml is gitignored.
+#
+#   cp profile/facts.example.yaml profile/facts.yaml
+#
+# This is the single source of truth for every fixed-value field an
+# application form asks for. The autofill packet is built entirely from here,
+# so anything wrong or missing shows up as a blank or a wrong answer on a real
+# form. The values below are a fictional placeholder person.
+
+identity:
+  legal_first_name: Jordan
+  legal_middle_initial: A
+  legal_middle_name: null      # initial only; a form wanting the full name is flagged
+  legal_last_name: Rivera
+  suffix: null
+  preferred_name: Jordan
+  pronouns: they/them
+  email: jordan.rivera@example.com
+  phone: "(555) 010-4477"
+  linkedin: https://www.linkedin.com/in/example
+  github: https://github.com/example
+  portfolio: null
+
+address:
+  line1: 100 Example Street
+  line2: null
+  city: Springfield
+  state: IL
+  postal_code: "62701"
+  country: United States
+  # For "Location (City)" typeaheads, which are geocoded pickers. Always name
+  # the state: searching a bare city name will happily choose the wrong one in
+  # another state.
+  city_state: "Springfield, IL"
+  city_state_long: "Springfield, Illinois, United States"
+
+education:
+  school: Example State University
+  # Name the campus if the school picker offers several. A bare university name
+  # matches whichever campus comes first in the list, which may not be yours.
+  school_display: Example State University - Main Campus
+  school_location: Springfield, IL
+  degree: Bachelor of Science
+  major: Computer Science
+  gpa: "3.50"
+  gpa_scale: "4.0"
+  start_date: "2023-08"
+  graduation_date: "2027-05"
+  currently_enrolled: true
+  # Greenhouse splits education dates into four separate required controls.
+  start_month: August
+  start_year: "2023"
+  end_month: May
+  end_year: "2027"
+
+work_authorization:
+  authorized_to_work_us: true
+  requires_sponsorship_now: false
+  requires_sponsorship_future: false
+  citizenship: US Citizen
+  security_clearance: none
+
+availability:
+  earliest_start_date: "2027-06-01"
+  willing_to_relocate: true
+  preferred_locations: [Chicago IL, New York NY, Remote]
+  work_arrangement: [onsite, hybrid, remote]
+
+compensation:
+  # Leave salary blank wherever a form allows it. Naming a number first is how
+  # you get anchored below the band. The fill engine refuses these fields
+  # outright; this text is only for forms that will not submit without one.
+  leave_blank: true
+  salary_expectation_text: "Open, targeting market rate for this role and location."
+  salary_expectation_number: null
+
+eeo:
+  # Every one of these may legally be declined. Put "decline" in any field you
+  # would rather not answer; the engine will pick the form's decline option.
+  gender: decline
+  race_ethnicity: decline
+  hispanic_latino: decline
+  veteran_status: "I am not a protected veteran"
+  disability_status: decline
+
+common_answers:
+  how_did_you_hear: Company careers page
+  previously_employed_here: false
+  related_to_employee: false
+  non_compete: false
+  felony_conviction: false
+  willing_to_complete_assessment: true
+  currently_employed: false
+  current_employer: null
+  notice_period: none
+  willing_to_travel: true
+  travel_percentage_ok: "up to 25%"
+  accommodation_request: none
+  requires_visa_transfer: false
+
+languages:
+  - language: English
+    proficiency: native
+
+documents:
+  # Put your resume at this path. The file itself is gitignored.
+  resume: profile/variants/resume.pdf
+  cover_letter: null
+  transcript: null
+  portfolio: null
+
+# Postings that demand references are filtered out at Tier-1 by default; see
+# the `references` block in config/rules.yaml. Fill this in and turn that rule
+# off if you would rather apply to them.
+references: []

@@ -1,0 +1,2 @@
+PyYAML>=6.0
+anthropic>=1.0   # Tier-2 scoring only; ingest and filtering are stdlib

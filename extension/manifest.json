@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Job Pipeline Autofill",
+  "version": "1.0.0",
+  "description": "Fills job application forms from the local job-pipeline server. Never submits.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "https://job-boards.greenhouse.io/*",
+    "https://boards.greenhouse.io/*",
+    "https://jobs.lever.co/*",
+    "https://jobs.eu.lever.co/*",
+    "https://jobs.ashbyhq.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://job-boards.greenhouse.io/*",
+        "https://boards.greenhouse.io/*",
+        "https://jobs.lever.co/*",
+        "https://jobs.eu.lever.co/*",
+        "https://jobs.ashbyhq.com/*"
+      ],
+      "js": [
+        "fill-engine.js",
+        "content.js"
+      ],
+      "css": [
+        "banner.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

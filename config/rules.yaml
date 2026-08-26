@@ -1,0 +1,243 @@
+# Tier-1 deterministic filter. Free, runs on every job, kills ~90% before any
+# token is spent. Every rejection records which rule fired, so a rule that is
+# too aggressive shows up in "jobs rejects --by-rule" instead of hiding.
+
+title:
+  # Must match at least one. Bare "engineer" is deliberately absent: on a full
+  # company board it lets through mechanical, civil, fire-protection, and
+  # propulsion roles, which is most of what SpaceX posts.
+  allow: ['\bsoftware\b', '\bswe\b', '\bsdet?\b', '\bdeveloper\b', '\bprogrammer\b',
+          '\bdata (scientist|analyst|engineer)\b', '\bmachine learning\b', '\bml\b',
+          '\bbackend\b', '\bback.end\b', '\bfront.?end\b', '\bfull.?stack\b',
+          '\bweb\b', '\bmobile\b', '\bios\b', '\bandroid\b',
+          '\bsite reliability\b', '\bsre\b', '\bdevops\b', '\bplatform engineer',
+          '\binfrastructure engineer', '\bsystems? engineer', '\bsecurity engineer',
+          '\bcloud engineer', '\bqa engineer', '\bcompiler\b', '\bdistributed systems\b']
+  # Any match rejects, even if allow matched.
+  deny: ['\bsenior\b', '\bsr\.?\b', '\bstaff\b', '\bprincipal\b', '\blead\b',
+         '\bmanager\b', '\bdirector\b', '\bhead of\b', '\bvp\b', '\bsales\b',
+         '\baccount (executive|manager)\b', '\brecruiter\b', '\bmarketing\b',
+         '\bcustomer success\b', '\bsolutions? architect\b',
+         '\bconsultant\b', '\bimplementation\b', '\bpre.?sales\b',
+         '\biii?\b', '\b(?:level|lvl|grade|tier)\s*[3-9]\b',
+         '\bphd\b', '\bpost.?doc\b',
+         # Engineering disciplines that are not this kind of engineering.
+         '\bmechanical\b', '\belectrical\b', '\bcivil\b', '\bstructural\b',
+         '\bthermal\b', '\bchemical\b', '\benvironmental\b', '\bfire protection\b',
+         '\bpropulsion\b', '\bmanufacturing\b', '\bindustrial\b', '\bmaterials\b',
+         '\bwelding\b', '\bmachinist\b', '\btechnician\b', '\brf\b', '\bantenna\b',
+         '\bavionics\b', '\boptical\b', '\bpackaging\b', '\bfacilities\b']
+
+employment:
+  # Graduation is May 2027, so a summer 2027 internship starts after the degree.
+  # Set false and re-run `jobs filter --all` to bring them back; no re-poll needed.
+  exclude_internships: true
+  internship_title_patterns:
+    - '\bintern\b'
+    - '\binternship\b'
+    - '\bco.?op\b'
+    - '\bsummer analyst\b'
+    - '\bapprentice(ship)?\b'
+    - '\bworking student\b'
+    - '\bplacement\b'
+    - '\bindustrial trainee\b'
+  # Matched against the ATS `employment_type` field, case-insensitively.
+  # Contract, temporary and seasonal are deliberately absent: they are not
+  # internships, and binning them here would put a wrong label on the reject.
+  internship_employment_types: [internship, intern]
+
+references:
+  # No references on file, by choice. A posting that demands them at the
+  # application stage is asking for something that does not exist.
+  exclude_reference_required: true
+  # Deliberately narrow. A bare \breferences\b would match "circular
+  # references" and "reference architecture" and quietly eat real software
+  # postings; every pattern here needs a requesting verb or a qualifier.
+  # A post-offer "reference check will be conducted" is NOT matched: that is
+  # boilerplate, not an application requirement.
+  patterns:
+    - '\b(?:three|two|3|2)\s+(?:professional\s+|business\s+|work\s+)?references\b'
+    - '\breferences?\s+(?:are\s+|will\s+be\s+|is\s+)?required\b'
+    - '\brequires?\s+(?:\w+\s+){0,3}references\b'
+    - '\bprovide\s+(?:\w+\s+){0,4}references\b'
+    - '\bsubmit\s+(?:\w+\s+){0,4}references\b'
+    - '\blist\s+of\s+(?:\w+\s+){0,2}references\b'
+    - '\b(?:professional|personal|character|employment|academic)\s+references\b'
+    - '\bnames?\s+and\s+contact\s+(?:\w+\s+){0,4}references\b'
+    - '\bletters?\s+of\s+recommendation\b'
+
+experience:
+  # Reject on an explicit floor above this many years anywhere in the description.
+  max_years_required: 2
+
+grad_window:
+  # New-grad reqs that name a graduation window outside this are not for us.
+  earliest: "2026-12"
+  latest: "2027-08"
+
+location:
+  # Matched against the normalized location (see util.norm_location).
+  # An empty list allows everything.
+  # "remote" is deliberately not in this list — allow_remote below handles it,
+  # and having it here would let "Remote, Canada" through before the deny list
+  # ever runs.
+  #
+  # A bare single word matches a whole token; anything with a space matches as a
+  # phrase. That distinction is load-bearing: several DMV place names also exist
+  # abroad, and an allowed city wins before the deny list runs. So Vienna,
+  # Richmond, Alexandria, Springfield, Norfolk, Hampton, Columbia, Sterling,
+  # Frederick, Laurel and Aberdeen are listed state-qualified only. A posting
+  # that says just "Vienna" is genuinely ambiguous and should not pass.
+  allow_substrings:
+    # Home region, the whole DMV
+    - dc
+    - maryland
+    - md
+    - virginia
+    - va
+    # DC proper
+    - washington dc
+    - navy yard
+    - capitol hill
+    # Maryland
+    - bethesda
+    - north bethesda
+    - rockville
+    - gaithersburg
+    - germantown
+    - clarksburg
+    - silver spring
+    - takoma park
+    - wheaton
+    - olney
+    - potomac
+    - chevy chase
+    - college park
+    - hyattsville
+    - greenbelt
+    - beltsville
+    - lanham
+    - bowie
+    - largo
+    - upper marlboro
+    - waldorf
+    - annapolis
+    - fort meade
+    - linthicum
+    - elkridge
+    - ellicott city
+    - catonsville
+    - towson
+    - owings mills
+    - hunt valley
+    - baltimore
+    - columbia md
+    - laurel md
+    - frederick md
+    - aberdeen md
+    - bel air md
+    - hanover md
+    # Northern Virginia
+    - arlington
+    - rosslyn
+    - ballston
+    - crystal city
+    - pentagon city
+    - national landing
+    - mclean
+    - tysons
+    - reston
+    - herndon
+    - ashburn
+    - chantilly
+    - fairfax
+    - falls church
+    - annandale
+    - merrifield
+    - centreville
+    - burke
+    - lorton
+    - manassas
+    - woodbridge
+    - dumfries
+    - quantico
+    - leesburg
+    - dulles
+    - stafford va
+    - sterling va
+    - vienna va
+    - springfield va
+    - alexandria va
+    # Rest of Virginia
+    - fredericksburg
+    - charlottesville
+    - blacksburg
+    - newport news
+    - virginia beach
+    - chesapeake
+    - williamsburg
+    - roanoke
+    - richmond va
+    - norfolk va
+    - hampton va
+    # Everywhere else that was already allowed
+    - new york
+    - ny
+    - brooklyn
+    - boston
+    - ma
+    - philadelphia
+    - pa
+    - seattle
+    - san francisco
+    - ca
+    - austin
+    - tx
+    - chicago
+    - il
+  allow_remote: true
+  # Checked before allow_remote. "Remote — Canada" is still not a job he can
+  # take, and remote postings otherwise bypass the allow list entirely.
+  deny_substrings: [canada, british columbia, ontario, quebec, montreal,
+                    toronto, vancouver, calgary, ottawa, waterloo on,
+                    austria, vienna austria, switzerland, zurich, sweden,
+                    stockholm, denmark, copenhagen, norway, oslo, finland,
+                    helsinki, romania, bucharest, czech, prague, hungary,
+                    budapest, greece, athens, turkey, istanbul, ukraine,
+                    korea, seoul, taiwan, taipei, hong kong, malaysia,
+                    indonesia, jakarta, philippines, manila, thailand, vietnam,
+                    new zealand, south africa, nigeria, kenya, egypt, dubai,
+                    united arab emirates, saudi, qatar, colombia, chile, peru,
+                    costa rica, uruguay,
+                    united kingdom, london, england, ireland, dublin, germany,
+                    berlin, munich, france, paris, netherlands, amsterdam,
+                    spain, madrid, portugal, lisbon, poland, warsaw, india,
+                    bangalore, hyderabad, pune, singapore, japan, tokyo, china,
+                    shanghai, beijing, australia, sydney, israel, tel aviv,
+                    brazil, mexico, argentina, emea, apac, latam]
+  # A posting with no location at all is kept — the ATS often omits it.
+  keep_unknown: true
+
+posting_age:
+  max_days: 14
+  # Applies only when the source gave us a date. Unknown age is kept.
+
+hard_reject_phrases:
+  - 'security clearance'
+  - 'ts/sci'
+  - 'top secret'
+  - 'active clearance'
+  - 'polygraph'
+  - 'phd required'
+  - 'mba required'
+  - 'unpaid internship'
+  - 'commission only'
+
+company_caps:
+  # Stage 5 spray penalty: never hold more than this many open applications at
+  # one company. Enforced at submit time, declared here so it lives with the rules.
+  max_open_applications_per_company: 2
+
+ghost_jobs:
+  # A req that has closed and reappeared this many times is probably not real.
+  max_reposts: 3
