@@ -179,8 +179,11 @@ def pending(conn: sqlite3.Connection, limit: int | None = None,
     where = ["is_open=1", "duplicate_of IS NULL", "filter_verdict='pass'"]
     if not rescore:
         where.append("fit_score IS NULL")
+    # remote_flag and score_json are here for the offline scorer: the first is
+    # a signal, the second is how a score being replaced gets kept.
     sql = (f"SELECT job_id, company, title, location, employment_type, posted_at, "
-           f"ats_vendor, repost_count, description_text, content_hash "
+           f"ats_vendor, repost_count, description_text, content_hash, "
+           f"remote_flag, score_json "
            f"FROM jobs WHERE {' AND '.join(where)} "
            f"ORDER BY COALESCE(posted_at, first_seen_at) DESC")
     if limit:

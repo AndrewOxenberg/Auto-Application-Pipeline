@@ -22,8 +22,9 @@ This is not decoration over a table. The mapping is exact:
 | lot | the most recent poll |
 
 What it deliberately is not: cards, avatars, company logos, a kanban board, or
-a "matches for you" feed. None of those are true here — there is no matching
-model yet, and the fit score column is empty until Phase 2.
+a "matches for you" feed. None of those are true here. The fit score is a
+deterministic rules score, not a model that knows you, and it orders the list
+without ever claiming to be a match.
 
 ## Color
 
@@ -73,10 +74,23 @@ alert strip     only present when a source is actually down
 workspace       list left, posting detail right, single column under 1000px
 ```
 
+The legend carries two taxonomies separated by a rule. To the left, what the
+filter decided: PASS and the reject bins. To the right, what you decided:
+APPLIED and PASSED. A posting belongs to exactly one of the two, triage first,
+so the die map's cells still add up to ALL DIE. The triage chips are outlined
+rather than filled, because the bin palette means "Tier-1 reject class" and
+these are not that; the die map draws them in ink tones for the same reason.
+
+PASS is what is still open to a decision, so the chip reads 496 while the PASS
+readout reads 497. Those are different questions. Yield is a property of the
+filter and does not move because you applied to something.
+
 ## Interaction
 
 - The bin legend and the die map are the same filter. Clicking a cell in the
-  map selects that bin.
+  map selects that bin. The AGE column header is the sort control, by the same
+  rule: the thing you read is the thing you press. It carries an up-down glyph
+  that becomes a down arrow when the list is ordered newest first.
 - Triage writes immediately. Status buttons toggle (pressing the active one
   returns the job to untriaged); the note autosaves 600ms after typing stops.
 - `/` focuses the search. Arrow keys move between rows, Enter opens one.
@@ -85,11 +99,14 @@ workspace       list left, posting detail right, single column under 1000px
 
 ## States that exist
 
-Skeleton sweep while loading, empty states that name the next command
-(`python jobs.py ingest`), a server-unreachable state that names the restart
+Skeleton sweep while loading, a server-unreachable state that names the restart
 command, a per-save failure message on the triage row, hover and focus rings on
-every control, and a dismissed-row treatment that greys the text without
-hiding the row.
+every control, and a dismissed-row treatment that greys the text without hiding
+the row inside the PASSED tab.
+
+Empty states name the next action, and which action depends on the tab. An
+empty reject bin names a command (`python jobs.py ingest`). An empty APPLIED
+tab names a button, because no amount of polling will ever put a posting in it.
 
 ## Known open findings
 

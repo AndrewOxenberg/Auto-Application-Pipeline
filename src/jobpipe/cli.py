@@ -11,6 +11,9 @@
     jobs probe <v> <slug>   hit one endpoint and print what came back
     jobs serve              local web UI at http://127.0.0.1:8765
     jobs score              Tier-2 LLM scoring on Tier-1 survivors
+    jobs push               send changes to the hosted site's store (feature 20)
+    jobs pull               bring the site's triage and scores back
+    jobs strip              drop descriptions nothing reads, then VACUUM
 """
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from . import bootstrap, db, dedup, filters, ingest, score, web
+from . import bootstrap, db, dedup, filters, ingest, offline_score, remote, score, sync, web
 from .http import get_json
 from .config import companies, lists
 from .sources import VENDORS, simplify
@@ -90,7 +93,8 @@ def cmd_ingest(args) -> int:
     print(f"dedup: {d['marked']} rows folded into {d['groups']} groups")
     counts = filters.apply(conn, only_new=not args.refilter)
     print(f"tier-1: {counts['pass']} pass / {counts['reject']} reject "
-          f"of {counts['evaluated']} evaluated")
+          f"of {counts['evaluated']} evaluated"
+          + (f", {counts['kept']} kept (description stripped)" if counts["kept"] else ""))
 
     alerts = ingest.health(conn)
     if alerts:
@@ -101,7 +105,8 @@ def cmd_ingest(args) -> int:
 def cmd_filter(args) -> int:
     counts = filters.apply(_conn(args), only_new=not args.all)
     print(f"tier-1: {counts['pass']} pass / {counts['reject']} reject "
-          f"of {counts['evaluated']} evaluated")
+          f"of {counts['evaluated']} evaluated"
+          + (f", {counts['kept']} kept (description stripped)" if counts["kept"] else ""))
     return 0
 
 
@@ -282,6 +287,19 @@ def cmd_probe(args) -> int:
 def cmd_score(args) -> int:
     conn = _conn(args)
 
+    # The default since feature 14. No key, no network, no cost, and it runs
+    # over the whole shortlist rather than whatever a budget allowed. --llm
+    # opts back into the Batch API path below.
+    if not args.llm:
+        jobs = score.pending(conn, limit=args.limit, rescore=args.rescore)
+        if not jobs:
+            print("nothing to score. Every Tier-1 survivor already has a fit "
+                  "score; use --rescore to redo them.")
+            return 0
+        run = offline_score.score_all(conn, jobs)
+        print(f"scored {run.scored} job(s) with {offline_score.MODEL}")
+        return 0
+
     if args.export_manual:
         jobs = score.pending(conn, limit=args.limit, rescore=args.rescore)
         if not jobs:
@@ -387,10 +405,44 @@ def _report(run) -> int:
     return 0 if not run.errored else 1
 
 
+def _site():
+    """The hosted store, from TURSO_* in the environment or in .env.local (what
+    `vercel env pull` writes). Totals only are printed: in GitHub Actions on a
+    public repo, the log is public."""
+    conn = remote.from_env(dotenv=db.ROOT / ".env.local")
+    if conn is None:
+        raise SystemExit("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are not set")
+    return conn
+
+
+def cmd_push(args) -> int:
+    site = _site()
+    s = sync.push(_conn(args), site, progress=(
+        (lambda st: print(f"  {st['jobs']} jobs sent", flush=True)) if args.verbose else None))
+    print(f"push: {s['jobs']} jobs ({s['new_jobs']} new), {s['events']} events, "
+          f"{s['runs']} source runs; {s['rows_written']} rows written in "
+          f"{s['requests']} requests" + (" [full push]" if s["full"] else ""))
+    return 0
+
+
+def cmd_pull(args) -> int:
+    s = sync.pull(_conn(args), _site())
+    moved = ", ".join(f"{k} {v}" for k, v in s.items() if k != "rows_read" and v)
+    print(f"pull: {s['rows_read']} rows compared; " + (moved or "no changes"))
+    return 0
+
+
+def cmd_strip(args) -> int:
+    n = sync.strip(_conn(args))
+    print(f"strip: {n} descriptions dropped")
+    return 0
+
+
 def cmd_serve(args) -> int:
     web.serve(host=args.host, port=args.port,
               db_path=Path(args.db) if args.db else None,
-              open_browser=not args.no_open)
+              open_browser=not args.no_open,
+              poll_on_start=not args.no_poll)
     return 0
 
 
@@ -456,8 +508,10 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--timeout", type=int, default=30)
     pr.set_defaults(func=cmd_probe)
 
-    sc = sub.add_parser("score", help="Tier-2 LLM scoring (API costs money; "
-                        "--export-manual/--import-manual do not)")
+    sc = sub.add_parser("score", help="Tier-2 scoring. Offline and free by "
+                        "default; --llm uses the Batch API and costs money")
+    sc.add_argument("--llm", action="store_true",
+                    help="use the Anthropic Batch API instead of the offline scorer")
     sc.add_argument("--limit", type=int, help="only the N most recent survivors")
     sc.add_argument("--rescore", action="store_true",
                     help="re-score jobs that already have a fit score")
@@ -484,7 +538,18 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--port", type=int, default=8765)
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--no-open", action="store_true", help="do not open a browser")
+    sv.add_argument("--no-poll", action="store_true",
+                    help="do not poll on startup (it is skipped anyway if one "
+                         "finished in the last 30 minutes)")
     sv.set_defaults(func=cmd_serve)
+
+    pu = sub.add_parser("push", help="send changes to the hosted site's store")
+    pu.add_argument("-v", "--verbose", action="store_true", help="print progress")
+    pu.set_defaults(func=cmd_push)
+    pl = sub.add_parser("pull", help="bring the site's triage and scores back")
+    pl.set_defaults(func=cmd_pull)
+    sp = sub.add_parser("strip", help="drop descriptions nothing reads, then VACUUM")
+    sp.set_defaults(func=cmd_strip)
 
     return p
 

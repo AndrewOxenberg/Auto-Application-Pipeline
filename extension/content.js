@@ -56,6 +56,68 @@
     return inputs.length >= 5 || (hasFile && inputs.length >= 3);
   }
 
+  // Feature 16. An Apply control and a Submit control are both "the primary
+  // button on the page", and this tool's one absolute rule is that it never
+  // submits. Anything naming a submit action is excluded by name even when it
+  // also says apply: "Submit application" IS the submit button on a Greenhouse
+  // form, and a text match alone would happily press it.
+  const SUBMIT_WORDS = /submit|send|finish|complete|confirm|save and continue/i;
+  const APPLY_TEXT = /^\s*(apply|apply now|apply for this job|apply to this job|apply here|start( your)? application)\s*$/i;
+
+  /**
+   * The Apply control on a job-description page, or null.
+   *
+   * Href shape beats text. A link whose path ends in /apply or /application is
+   * unambiguous; text matching is the fallback for Greenhouse, which renders a
+   * button and an in-page anchor rather than a route.
+   */
+  function findApplyControls() {
+    const clickable = Array.from(
+      document.querySelectorAll('a[href], button, [role="button"], input[type="button"]')
+    ).filter((el) => {
+      if (el.disabled) return false;
+      if (el.offsetParent === null && el.tagName !== "A") return false;
+      const label = `${el.textContent || ""} ${el.value || ""} ${el.getAttribute("aria-label") || ""}`;
+      return !SUBMIT_WORDS.test(label);
+    });
+
+    const byHref = [];
+    const byText = [];
+    for (const el of clickable) {
+      const href = el.getAttribute("href") || "";
+      const label = (el.textContent || el.value || el.getAttribute("aria-label") || "").trim();
+      if (/\/(apply|application)\/?(\?|#|$)/i.test(href) || href === "#app") {
+        byHref.push(el);
+      } else if (APPLY_TEXT.test(label)) {
+        byText.push(el);
+      }
+    }
+    return [...byHref, ...byText].slice(0, 3);
+  }
+
+  /**
+   * Click toward the form. Returns true if a form appeared.
+   *
+   * Guarded by formIsPresent(): if the application is already on the page there
+   * is nothing to click toward, and this returns without touching anything.
+   * That guard is what makes it structurally unable to press Submit.
+   */
+  async function clickApply() {
+    if (formIsPresent()) return true;
+    for (const el of findApplyControls()) {
+      el.click();
+      for (let waited = 0; waited < 2500; waited += 250) {
+        await sleep(250);
+        if (formIsPresent()) return true;
+      }
+      // A route change may still be rendering; the observer below catches it.
+      if (location.pathname !== new URL(el.href || location.href, location.href).pathname) {
+        return false;
+      }
+    }
+    return false;
+  }
+
   /**
    * Wait for the application form to exist.
    *
@@ -150,7 +212,12 @@
     // Fetch the resume while waiting; the form often appears first.
     const resumePromise = getResume();
 
-    if (!formIsPresent()) waitingNotice();
+    // Feature 16: click Apply rather than asking for it. The banner is still
+    // the fallback, for a page whose Apply control we cannot identify.
+    if (!formIsPresent()) {
+      const opened = await clickApply();
+      if (!opened && !formIsPresent()) waitingNotice();
+    }
     const ready = await waitForForm();
     if (!ready) return;
 
@@ -162,6 +229,11 @@
     banner(packet, report);
     chrome.runtime.sendMessage({ type: "clearPending" }).catch(() => {});
   }
+
+  // Exposed for the same reason fill-engine.js exposes window.__jobpipe: so a
+  // test drives exactly the code that ships, rather than a copy of it.
+  window.__jobpipe_apply = { findApplyControls, formIsPresent, sameJob,
+                             SUBMIT_WORDS, APPLY_TEXT };
 
   if (document.readyState === "complete") start();
   else window.addEventListener("load", start, { once: true });

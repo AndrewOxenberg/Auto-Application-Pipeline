@@ -13,11 +13,12 @@ import sys
 import threading
 import time
 import webbrowser
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import apply, db, ingest
+from . import apply, db, ingest, remote
 from .util import now_iso
 
 UI_DIR = Path(__file__).with_name("ui")
@@ -42,7 +43,34 @@ BIN_BY_KEY = {key: (label, prefixes) for key, label, prefixes in BINS}
 # extend the front of it rather than replacing anything downstream.
 TRIAGE_STATES = {"discovered", "shortlisted", "submitted", "dismissed"}
 
+# Feature 19. Two more tabs in the legend, but a different taxonomy: BINS says
+# what the filter decided, these say what you decided. A row belongs to exactly
+# one of the two, triage first, so the die map's cells still add up to ALL DIE.
+TRIAGE_BINS = [
+    ("applied", "APPLIED", "submitted"),
+    ("passed", "PASSED", "dismissed"),
+]
+TRIAGE_BIN_STATUS = {key: status for key, _, status in TRIAGE_BINS}
+# The states a posting is finished with, and so no longer part of the shortlist.
+SETTLED = tuple(TRIAGE_BIN_STATUS.values())
+
 _OPEN = "is_open=1 AND duplicate_of IS NULL"
+
+# Feature 17. "New" is a question about time, not about a counter. The old test
+# was seen_count=1, which means "found in the most recent poll and not seen
+# since" - so the next poll moved every new row to 2 and the filter went empty.
+# Feature 15 made that permanent by polling on startup.
+FRESH_CUTOFF = "datetime('now', '-24 hours')"
+
+# How the list can be ordered. Server-side, so the UI never builds SQL. Each
+# order falls back to the other key, so ties are never arbitrary.
+SORTS = {
+    "score": ("fit_score IS NULL, fit_score DESC, "
+              "COALESCE(posted_at, first_seen_at) DESC"),
+    "age": ("COALESCE(posted_at, first_seen_at) DESC, "
+            "fit_score IS NULL, fit_score DESC"),
+}
+DEFAULT_SORT = "score"
 
 
 class Poller:
@@ -110,16 +138,16 @@ class Poller:
             filters.apply(conn, only_new=True)
 
             # Score whatever just cleared Tier-1, so a posting found at 04:00
-            # is ranked by the time anyone looks. No-ops without an API key.
+            # is ranked by the time anyone looks. Offline since feature 14, so
+            # this no longer depends on a key being present and no longer
+            # silently leaves the newest rows unranked.
+            from . import offline_score as _offline
             from . import score as _score
-            if _score.has_credentials():
-                with self._lock:
-                    self.state["source"] = "scoring"
-                result = _score.score_pending(conn)
-                with self._lock:
-                    self.state["scored"] = result.scored
-                    if result.errored:
-                        self.state["score_errors"] = result.errored
+            with self._lock:
+                self.state["source"] = "scoring"
+            result = _offline.score_all(conn, _score.pending(conn))
+            with self._lock:
+                self.state["scored"] = result.scored
         except Exception as e:  # noqa: BLE001 - the thread must report, not vanish
             with self._lock:
                 self.state["error"] = f"{type(e).__name__}: {e}"
@@ -173,12 +201,30 @@ class PendingApply:
 PENDING = PendingApply()
 
 
+def _all_prefixes() -> list[str]:
+    return [p for _, _, prefixes in BINS if prefixes for p in prefixes]
+
+
 def _bin_sql(key: str) -> tuple[str, list]:
     """WHERE fragment for one bin. Kept server-side so the UI never builds SQL."""
     if key in ("all", ""):
         return "", []
     if key == "pass":
-        return "filter_verdict='pass'", []
+        # Feature 19: the shortlist is what is still open to a decision, so a
+        # posting you have applied to or passed on leaves it for its own tab.
+        placeholders = ",".join("?" for _ in SETTLED)
+        return f"filter_verdict='pass' AND status NOT IN ({placeholders})", list(SETTLED)
+    if key in TRIAGE_BIN_STATUS:
+        return "status=?", [TRIAGE_BIN_STATUS[key]]
+    if key == "unbinned":
+        # UNBINNED is a residual with no prefixes of its own, so it used to fall
+        # through to "" and quietly return the entire database - 41,573 rows
+        # under a header that read as a filtered view. It is the rejects whose
+        # reason matches no known prefix, which is what the count always meant.
+        prefixes = _all_prefixes()
+        clause = " AND ".join("filter_reason NOT LIKE ?" for _ in prefixes)
+        return (f"filter_verdict='reject' AND (filter_reason IS NULL OR "
+                f"({clause}))", [f"{p}%" for p in prefixes])
     entry = BIN_BY_KEY.get(key)
     if not entry or not entry[1]:
         return "", []
@@ -202,21 +248,34 @@ class Api:
         c = self.conn
         rows = c.execute(
             f"SELECT filter_verdict, filter_reason, status, "
-            f"       SUM(CASE WHEN seen_count=1 THEN 1 ELSE 0 END) AS fresh, "
+            f"       SUM(CASE WHEN first_seen_at >= {FRESH_CUTOFF} "
+            f"                THEN 1 ELSE 0 END) AS fresh, "
             f"       COUNT(*) AS n "
             f"FROM jobs WHERE {_OPEN} "
             f"GROUP BY filter_verdict, filter_reason, status").fetchall()
 
         tally = {key: 0 for key, _, _ in BINS}
+        tally.update({key: 0 for key, _, _ in TRIAGE_BINS})
+        by_status = {status: key for key, _, status in TRIAGE_BINS}
         triage: dict[str, int] = {}
         openn = fresh = passed = 0
         for r in rows:
             openn += r["n"]
             triage[r["status"]] = triage.get(r["status"], 0) + r["n"]
+            # Yield is a property of the filter, not of what you did afterwards,
+            # so these two stay on the Tier-1 number even once a posting has
+            # moved into APPLIED or PASSED.
             if r["filter_verdict"] == "pass":
-                tally["pass"] += r["n"]
                 passed += r["n"]
                 fresh += r["fresh"]
+            # Triage first, so every row lands in exactly one bin and the die
+            # map's cells still add up to ALL DIE.
+            settled = by_status.get(r["status"])
+            if settled:
+                tally[settled] += r["n"]
+                continue
+            if r["filter_verdict"] == "pass":
+                tally["pass"] += r["n"]
                 continue
             reason = r["filter_reason"] or ""
             for key, _, prefixes in BINS:
@@ -228,11 +287,15 @@ class Api:
 
         labels = dict((key, label) for key, label, _ in BINS)
         labels["unbinned"] = "UNBINNED"
-        counts = [{"key": k, "label": labels[k], "count": tally[k]}
-                  for k, _, _ in BINS]
+        labels.update({key: label for key, label, _ in TRIAGE_BINS})
+        counts = [{"key": k, "label": labels[k], "count": tally[k],
+                   "kind": "tier1"} for k, _, _ in BINS]
         if tally.get("unbinned"):
             counts.append({"key": "unbinned", "label": "UNBINNED",
-                           "count": tally["unbinned"]})
+                           "count": tally["unbinned"], "kind": "tier1"})
+        # Triage tabs come last, after the Tier-1 taxonomy they are not part of.
+        counts += [{"key": k, "label": labels[k], "count": tally[k],
+                    "kind": "triage"} for k, _, _ in TRIAGE_BINS]
 
         meta = c.execute(
             "SELECT (SELECT COUNT(*) FROM jobs) AS total, "
@@ -277,7 +340,10 @@ class Api:
             params.append(status)
 
         if q.get("fresh", [""])[0] == "1":
-            where.append("seen_count=1")
+            where.append(f"first_seen_at >= {FRESH_CUTOFF}")
+
+        sort = q.get("sort", [DEFAULT_SORT])[0]
+        order = SORTS.get(sort) or SORTS[DEFAULT_SORT]
 
         limit = min(int(q.get("limit", ["120"])[0] or 120), 500)
         offset = max(int(q.get("offset", ["0"])[0] or 0), 0)
@@ -290,10 +356,10 @@ class Api:
             f"posted_at, first_seen_at, seen_count, repost_count, fit_score, "
             f"status, filter_verdict, filter_reason, url "
             f"FROM jobs WHERE {clause} "
-            f"ORDER BY fit_score IS NULL, fit_score DESC, "
-            f"COALESCE(posted_at, first_seen_at) DESC LIMIT ? OFFSET ?",
+            f"ORDER BY {order} LIMIT ? OFFSET ?",
             params + [limit, offset]).fetchall()
         return {"total": total, "limit": limit, "offset": offset,
+                "sort": sort if sort in SORTS else DEFAULT_SORT,
                 "jobs": [dict(r) for r in rows]}
 
     def job(self, job_id: str) -> dict | None:
@@ -363,9 +429,28 @@ class Api:
 _ID_RE = re.compile(r"^[0-9a-f]{1,40}$")
 
 
+def _mirror_triage(job_id: str, payload: dict) -> dict:
+    """Feature 20. A decision made on the laptop also lands on the hosted site,
+    which owns triage; otherwise the next refresh from it would undo this one.
+    The local write has already succeeded, so a failure here is reported, not
+    raised."""
+    site = remote.from_env(dotenv=db.ROOT / ".env.local")
+    if site is None:
+        return {"mirrored": False, "mirror_error": "no TURSO_* credentials"}
+    try:
+        Api(site).triage(job_id, payload)
+        return {"mirrored": True}
+    except KeyError:
+        return {"mirrored": False, "mirror_error": "not on the hosted site yet"}
+    except (remote.RemoteError, ValueError) as e:
+        return {"mirrored": False, "mirror_error": str(e)}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "jobpipe"
     db_path: Path | None = None
+    # Set by serve() only, never at import, so tests cannot write to the real site.
+    mirror: bool = False
 
     # -- plumbing ---------------------------------------------------------
     def log_message(self, fmt, *args):  # quieter than the default access log
@@ -529,7 +614,10 @@ class Handler(BaseHTTPRequestHandler):
 
         conn, api = self._api()
         try:
-            return self._json(api.triage(match.group(1), payload))
+            result = api.triage(match.group(1), payload)
+            if self.mirror:
+                result.update(_mirror_triage(match.group(1), payload))
+            return self._json(result)
         except KeyError:
             return self._error(404, "no such job")
         except ValueError as e:
@@ -547,13 +635,57 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, path.read_bytes(), ctype)
 
 
+STARTUP_POLL_MAX_AGE_SECONDS = 1800
+
+
+def _minutes_since_last_poll(db_path: Path | None) -> float | None:
+    """Minutes since the newest source_runs row, or None if there are none."""
+    conn = None
+    try:
+        conn = db.connect(db_path) if db_path else db.connect()
+        row = conn.execute("SELECT MAX(run_at) FROM source_runs").fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+    if not row or not row[0]:
+        return None
+    try:
+        last = datetime.fromisoformat(row[0])
+    except ValueError:
+        return None
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - last).total_seconds() / 60
+
+
 def serve(host: str = "127.0.0.1", port: int = 8765, db_path: Path | None = None,
-          open_browser: bool = True) -> None:
+          open_browser: bool = True, poll_on_start: bool = True) -> None:
     Handler.db_path = db_path
+    Handler.mirror = remote.from_env(dotenv=db.ROOT / ".env.local") is not None
     httpd = ThreadingHTTPServer((host, port), Handler)
     url = f"http://{host}:{port}/"
     print(f"jobpipe ui  {url}")
+    if Handler.mirror:
+        print("triage is also written to the hosted site (feature 20)")
     print("ctrl-c to stop")
+
+    # Feature 15. The scheduled task keeps getting killed mid-run by the
+    # machine going down, so the data was 44 hours stale when this was written.
+    # Opening the site is the moment fresh data is actually wanted, so hang a
+    # poll off that. It runs in the same background thread the Run poll button
+    # uses, which is why the page is up immediately either way.
+    if poll_on_start:
+        age = _minutes_since_last_poll(db_path)
+        if age is not None and age < STARTUP_POLL_MAX_AGE_SECONDS / 60:
+            print(f"last poll {age:.0f}m ago, skipping the startup poll "
+                  f"(--no-poll to always skip)")
+        else:
+            started, detail = POLLER.start(db_path)
+            print("polling in the background..." if started
+                  else f"startup poll not started: {detail}")
+
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:

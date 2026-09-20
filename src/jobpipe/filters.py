@@ -10,7 +10,7 @@ import re
 import sqlite3
 
 from .config import rules
-from .util import days_since, norm_location
+from .util import content_hash, days_since, norm_location
 
 # "5+ years", "5-7 years", "minimum of 5 years of relevant experience"
 _YEARS_RE = re.compile(
@@ -181,18 +181,35 @@ class Tier1:
         return "pass", None
 
 
+def _stripped(r) -> bool:
+    """True when the description was dropped to keep the hosted engine file small
+    (feature 20), as opposed to a posting that never had one. content_hash covers
+    title, location and description exactly as stored, so a genuinely empty
+    description still hashes to the empty form."""
+    if r["description_text"] is not None or not r["content_hash"]:
+        return False
+    return r["content_hash"] not in (content_hash(r["title"], r["location"], ""),
+                                     content_hash(r["title"], r["location"], None))
+
+
 def apply(conn: sqlite3.Connection, only_new: bool = False) -> dict:
     t1 = Tier1()
     where = "WHERE is_open=1" + (" AND filter_verdict IS NULL" if only_new else "")
     rows = conn.execute(
         f"SELECT job_id, title, description_text, location, remote_flag, posted_at, "
-        f"repost_count, employment_type FROM jobs {where}").fetchall()
-    counts = {"pass": 0, "reject": 0}
+        f"repost_count, employment_type, content_hash, filter_verdict FROM jobs {where}"
+    ).fetchall()
+    counts = {"pass": 0, "reject": 0, "kept": 0}
     for r in rows:
+        # A stripped row judged without its text would lose every description
+        # rule. Keep its verdict; the next fetch restores the text.
+        if r["filter_verdict"] is not None and _stripped(r):
+            counts["kept"] += 1
+            continue
         verdict, reason = t1.evaluate(dict(r))
         counts[verdict] += 1
         conn.execute("UPDATE jobs SET filter_verdict=?, filter_reason=? WHERE job_id=?",
                      (verdict, reason, r["job_id"]))
     conn.commit()
-    counts["evaluated"] = len(rows)
+    counts["evaluated"] = len(rows) - counts["kept"]
     return counts

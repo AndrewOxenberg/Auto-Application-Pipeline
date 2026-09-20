@@ -102,6 +102,13 @@ a{color:var(--sel)}
   border-bottom-color:var(--panel-2);border-radius:3px 3px 0 0;
 }
 .chip{width:9px;height:9px;flex:0 0 9px;border-radius:1px;transform:translateY(1px)}
+/* Triage tabs are a different taxonomy from the reject bins and must not read
+   as one of them, so the chip is an outline and the bin palette is untouched. */
+.bin[data-kind="triage"] .chip{background:none;border:1px solid var(--ink-3)}
+.bin-sep{
+  width:1px;align-self:stretch;margin:6px 9px 9px;
+  background:var(--rule);flex:0 0 1px;
+}
 .bin-n{font-family:var(--font-mono);font-variant-numeric:tabular-nums;color:var(--ink-2)}
 .bin[aria-pressed="true"] .bin-n{color:var(--ink);font-weight:600}
 .bin-l{font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.07em;color:var(--ink-3)}
@@ -160,6 +167,19 @@ thead th{
   text-transform:uppercase;color:var(--ink-3);font-weight:500;
 }
 th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+/* The column header is the sort control, the same way the bin legend is the
+   bin filter. Inherits the header's own type so it reads as a header first. */
+.sortbtn{
+  font:inherit;letter-spacing:inherit;text-transform:inherit;color:inherit;
+  background:none;border:0;padding:0;cursor:pointer;
+  display:inline-flex;align-items:center;gap:4px;
+  transition:color 140ms;
+}
+.sortbtn:hover{color:var(--ink)}
+.sortbtn::after{content:"\2195";opacity:.35;font-size:11px}
+.sortbtn[aria-pressed="true"]{color:var(--ink)}
+.sortbtn[aria-pressed="true"]::after{content:"\2193";opacity:1}
+.sortbtn:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
 tbody tr{border-bottom:1px solid var(--rule-2);cursor:pointer}
 tbody tr:hover{background:var(--panel-3)}
 tbody tr[aria-selected="true"]{background:var(--sel-wash)}
@@ -380,7 +400,7 @@ dialog::backdrop{background:rgba(10,12,16,.5)}
       <div><span class="lbl">Binned out</span><b id="r-reject">—</b></div>
       <div><span class="lbl">Pass</span><b id="r-pass">—</b></div>
       <div class="yield"><span class="lbl">Yield</span><b id="r-yield">—</b></div>
-      <div><span class="lbl">New this poll</span><b id="r-fresh">—</b></div>
+      <div><span class="lbl">New 24h</span><b id="r-fresh">—</b></div>
     </div>
   </div>
   <div class="map-row">
@@ -412,7 +432,7 @@ dialog::backdrop{background:rgba(10,12,16,.5)}
                aria-label="Filter postings" autocomplete="off">
       </label>
       <button class="toggle" id="fresh" aria-pressed="false"
-              title="Only postings first seen in the latest poll">New only</button>
+              title="Only postings first seen in the last 24 hours">New only</button>
       <select class="toggle" id="status" aria-label="Triage state">
         <option value="all">All states</option>
         <option value="discovered">Untriaged</option>
@@ -426,7 +446,11 @@ dialog::backdrop{background:rgba(10,12,16,.5)}
       <table id="table" hidden>
         <thead><tr>
           <th scope="col">Company</th><th scope="col">Title</th>
-          <th scope="col" class="num">Age</th><th scope="col" class="num">State</th>
+          <th scope="col" class="num"><button type="button" id="sort-age"
+              class="sortbtn" aria-pressed="false"
+              title="Sort by newest first. Click again to sort by fit score."
+              >Age</button></th>
+          <th scope="col" class="num">State</th>
         </tr></thead>
         <tbody id="rows"></tbody>
       </table>
@@ -473,11 +497,14 @@ const $ = (id) => document.getElementById(id);
 const BIN_VAR = {pass:"--bin-pass",title:"--bin-title",location:"--bin-location",
   experience:"--bin-experience",phrase:"--bin-phrase",grad:"--bin-grad",
   stale:"--bin-stale",ghost:"--bin-ghost",unbinned:"--bin-unbinned",
-  internship:"--bin-internship",references:"--bin-references"};
+  internship:"--bin-internship",references:"--bin-references",
+  // Feature 19. Triage tabs are a different taxonomy from the reject bins, so
+  // they borrow no bin colour; ink tones say "not a bin" and follow the theme.
+  applied:"--ink-2", passed:"--ink-3"};
 const STATE_FLAG = {shortlisted:["short","SHORTLIST"],submitted:["sub","APPLIED"],
   dismissed:["dis","PASSED"]};
 
-const state = {bin:"pass", q:"", fresh:false, status:"all",
+const state = {bin:"pass", q:"", fresh:false, status:"all", sort:"score",
                offset:0, limit:120, jobs:[], selected:null, summary:null, noteTimer:null};
 
 const nf = new Intl.NumberFormat("en-US");
@@ -502,6 +529,11 @@ function ageText(iso){
   return Math.floor(hours/24)+"d";
 }
 
+/* Feature 20. The hosted copy (Vercel) injects this. It has no laptop behind
+   it: no Auto Apply, no local poll thread, and seen_count is only refreshed
+   when a row changes, so the pieces that depend on those are hidden. */
+const HOSTED = !!window.JOBPIPE_HOSTED;
+
 async function api(path, opts){
   const res = await fetch(path, opts);
   if(!res.ok){
@@ -515,7 +547,7 @@ async function api(path, opts){
 function fatal(where, err){
   const box = $(where);
   box.hidden = false;
-  box.innerHTML = `<h2>Cannot reach the local server</h2>
+  box.innerHTML = `<h2>Cannot reach the ${HOSTED ? "" : "local "}server</h2>
     <p>${esc(err.message)}</p>
     <p>Restart it with <code>python jobs.py serve</code> in the project folder,
        then reload this page.</p>`;
@@ -544,12 +576,25 @@ async function loadSummary(){
   all.innerHTML = `<span class="bin-n">${nf.format(s.open)}</span>
     <span class="bin-l">ALL DIE</span>`;
   bins.append(all);
+  let sawTriage = false;
   for(const b of s.bins){
-    if(!b.count) continue;
+    // A triage tab is shown even at zero: "nothing applied to yet" is the
+    // answer to a question worth asking, where an empty reject bin is not.
+    if(!b.count && b.kind !== "triage") continue;
+    if(b.kind === "triage" && !sawTriage){
+      sawTriage = true;
+      const sep = document.createElement("span");
+      sep.className = "bin-sep"; sep.setAttribute("aria-hidden","true");
+      bins.append(sep);
+    }
     const el = document.createElement("button");
     el.className = "bin"; el.dataset.bin = b.key;
+    el.dataset.kind = b.kind || "tier1";
     el.setAttribute("aria-pressed", String(state.bin === b.key));
-    el.innerHTML = `<span class="chip" style="background:var(${BIN_VAR[b.key]||"--bin-unbinned"})"></span>
+    const chip = b.kind === "triage"
+      ? `<span class="chip" style="border-color:var(${BIN_VAR[b.key]})"></span>`
+      : `<span class="chip" style="background:var(${BIN_VAR[b.key]||"--bin-unbinned"})"></span>`;
+    el.innerHTML = `${chip}
       <span class="bin-n">${nf.format(b.count)}</span>
       <span class="bin-l">${esc(b.label)}</span>`;
     bins.append(el);
@@ -642,7 +687,7 @@ async function loadJobs(append){
   if(!append){ state.offset = 0; $("list-skel").hidden = false; $("table").hidden = true; }
   $("list-empty").hidden = true;
   const p = new URLSearchParams({bin:state.bin, q:state.q, status:state.status,
-    limit:String(state.limit), offset:String(state.offset)});
+    sort:state.sort, limit:String(state.limit), offset:String(state.offset)});
   if(state.fresh) p.set("fresh","1");
 
   let data;
@@ -661,9 +706,21 @@ function renderRows(total){
     $("table").hidden = true;
     const e = $("list-empty"); e.hidden = false;
     const label = state.bin === "pass" ? "the PASS bin" : "this bin";
+    // A triage tab fills up from the buttons on a posting, not from a poll, so
+    // telling someone to run `ingest` here would send them the wrong way.
+    const triage = (state.summary?.bins || [])
+      .find((b) => b.key === state.bin && b.kind === "triage");
     e.innerHTML = state.q || state.fresh || state.status !== "all"
       ? `<h2>Nothing matches those filters</h2>
          <p>Clear the search or switch bins. ${nf.format(total)} postings sit in ${label} unfiltered.</p>`
+      : triage
+      ? (state.bin === "applied"
+        ? `<h2>Nothing applied to yet</h2>
+           <p>Open a posting in <b>PASS</b> and mark it <b>Applied</b>. It moves here,
+              and leaves the shortlist so it stops competing for attention tomorrow.</p>`
+        : `<h2>Nothing passed on yet</h2>
+           <p>Marking a posting <b>Pass</b> moves it here and out of the shortlist.
+              Nothing is deleted, so you can always take one back.</p>`)
       : `<h2>This bin is empty</h2>
          <p>Run <code>python jobs.py ingest</code> to poll for postings, then reload.</p>`;
     $("count").textContent = "0 of "+nf.format(total);
@@ -721,6 +778,13 @@ $("fresh").addEventListener("click",(e)=>{
   loadJobs();
 });
 $("status").addEventListener("change",(e)=>{ state.status = e.target.value; loadJobs(); });
+// Feature 18. Age and fit score are the only two orders that mean anything
+// here, so one control toggles between them rather than a menu of columns.
+$("sort-age").addEventListener("click",(e)=>{
+  state.sort = state.sort === "age" ? "score" : "age";
+  e.currentTarget.setAttribute("aria-pressed", String(state.sort === "age"));
+  loadJobs();
+});
 
 /* ---------- detail ---------- */
 async function select(id){
@@ -751,7 +815,7 @@ function renderDetail(j){
     ["Posted", j.posted_at
       ? j.posted_at.slice(0,10)+" ("+ageText(j.posted_at)+")" : "not stated"],
     ["First seen", (j.first_seen_at||"").slice(0,10)],
-    ["Polls seen", j.seen_count],
+    ...(HOSTED ? [] : [["Polls seen", j.seen_count]]),
     ["Bin", j.filter_verdict === "pass" ? "PASS" : (j.filter_reason || "unbinned")],
     ["Fit score", j.fit_score ?? "not scored yet"],
   ];
@@ -781,8 +845,8 @@ function renderDetail(j){
     <div class="acts">
       <a class="act go" href="${esc(j.apply_url || j.url)}" target="_blank" rel="noopener">
         <svg width="16" height="16" aria-hidden="true"><use href="#i-ext"/></svg>Open posting</a>
-      <button class="act autoapply" id="autoapply">
-        <svg width="16" height="16" aria-hidden="true"><use href="#i-fill"/></svg>Auto Apply</button>
+      ${HOSTED ? "" : `<button class="act autoapply" id="autoapply">
+        <svg width="16" height="16" aria-hidden="true"><use href="#i-fill"/></svg>Auto Apply</button>`}
       <button class="act" data-set="shortlisted" aria-pressed="${st==="shortlisted"}">
         <svg width="16" height="16" aria-hidden="true"><use href="#i-flag"/></svg>Shortlist</button>
       <button class="act" data-set="submitted" aria-pressed="${st==="submitted"}">
@@ -818,13 +882,16 @@ function renderDetail(j){
       for(const b of document.querySelectorAll(".act[data-set]"))
         b.setAttribute("aria-pressed", String(b.dataset.set === next));
       const row = state.jobs.find((x)=>x.job_id === j.job_id);
-      if(row){ row.status = next; renderRows(Number(
-        ($("count").textContent.match(/of ([\d,]+)/)||[0,"0"])[1].replace(/,/g,""))); }
+      if(row) row.status = next;
+      // Feature 19: applying to a job takes it out of PASS, so the list it is
+      // standing in and the tab counts both have to catch up. The detail pane
+      // stays put, so you can still read what you just filed.
+      await Promise.all([loadSummary(), loadJobs()]);
     });
   }
   /* Auto Apply. The page opens the form and prepares the answers; it cannot
      type into another origin, so Claude in Chrome does the filling. */
-  $("autoapply").addEventListener("click", async () => {
+  $("autoapply")?.addEventListener("click", async () => {
     const box = $("packet");
     box.innerHTML = `<div class="packet"><div class="skel"><i></i><i></i><i></i></div></div>`;
 
@@ -975,6 +1042,18 @@ let pollTimer = null;
 function renderPoll(s){
   const btn = $("poll"), label = $("poll-label"), status = $("poll-status");
   status.classList.remove("done", "bad");
+  if(s.hosted){
+    // Polls run on GitHub Actions every 4 hours; a click can only queue one.
+    btn.disabled = !s.can_dispatch;
+    btn.classList.remove("busy");
+    label.textContent = "Run poll";
+    btn.title = s.can_dispatch ? "Queue a poll on GitHub Actions (about 5 minutes)"
+                               : "Polls run on GitHub Actions every 4 hours";
+    status.textContent = s.message
+      || (s.last_run ? `polled ${ageText(s.last_run)} ago · every 4h` : "no poll yet");
+    if(s.message) status.classList.add(s.started ? "done" : "bad");
+    return;
+  }
   if(s.running){
     btn.disabled = true;
     btn.classList.add("busy");
@@ -1021,7 +1100,7 @@ $("poll").addEventListener("click", async () => {
   try{
     const s = await api("/api/poll", {method:"POST"});
     renderPoll(s);
-    watchPoll();
+    if(!s.hosted) watchPoll();
   }catch(err){
     // 409 means the scheduled task or another tab already has one going.
     $("poll-status").textContent = err.message;
@@ -1029,7 +1108,7 @@ $("poll").addEventListener("click", async () => {
     $("poll").disabled = false;
     $("poll").classList.remove("busy");
     $("poll-label").textContent = "Run poll";
-    watchPoll();
+    if(!HOSTED) watchPoll();
   }
 });
 

@@ -1,0 +1,117 @@
+# Feature 20. The poll that used to be a Windows scheduled task, off the laptop.
+#
+# Every 4 hours: fetch the engine file from the private Vercel Blob store, copy
+# the site's triage into it, poll every source, score, push the changes to the
+# site's Turso store, then strip and store the engine again.
+#
+# This repo is public, so this log is public. Nothing here prints a company
+# name: ingest writes its per-source lines to a file and only the totals are
+# shown. Secrets: TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, BLOB_READ_WRITE_TOKEN.
+# The Blob store holds engine/jobs.db.gz, engine/companies.yaml and
+# engine/evidence.yaml; scripts/seed-hosted.ps1 puts them there. facts.yaml
+# (address, phone, EEO answers) is never needed here and never uploaded.
+
+name: poll
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: poll
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  VERCEL_CLI: vercel@59.23.2
+  TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+  TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+  BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+  VERCEL_TELEMETRY_DISABLED: "1"
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Before cutover none of the secrets exist, and a scheduled run every 4
+      # hours would only send failure mail. Once any one is set, a missing one
+      # is a real problem and the run below fails on it.
+      - name: Check configuration
+        id: config
+        run: |
+          if [ -z "$TURSO_DATABASE_URL$TURSO_AUTH_TOKEN$BLOB_READ_WRITE_TOKEN" ]; then
+            echo "no secrets set yet; nothing to poll (see feature 20)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        if: steps.config.outputs.ready == 'true'
+        run: pip install --quiet "PyYAML>=6.0"
+
+      # No engine means no history: every open posting would be "discovered"
+      # again. Fail loudly instead of starting from empty.
+      - name: Fetch engine and target list
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          mkdir -p data
+          npx --yes "$VERCEL_CLI" blob get engine/jobs.db.gz --access private \
+            --output data/jobs.db.gz --rw-token "$BLOB_READ_WRITE_TOKEN" --non-interactive > /dev/null
+          npx --yes "$VERCEL_CLI" blob get engine/companies.yaml --access private \
+            --output config/companies.yaml --rw-token "$BLOB_READ_WRITE_TOKEN" --non-interactive > /dev/null
+          # The offline scorer cites records from evidence.yaml. Without the real
+          # file it would silently fall back to the checked-in example.
+          npx --yes "$VERCEL_CLI" blob get engine/evidence.yaml --access private \
+            --output profile/evidence.yaml --rw-token "$BLOB_READ_WRITE_TOKEN" --non-interactive > /dev/null
+          test -s config/companies.yaml && test -s profile/evidence.yaml
+          gunzip -f data/jobs.db.gz
+          python -c "import sqlite3; n = sqlite3.connect('data/jobs.db').execute('SELECT COUNT(*) FROM jobs').fetchone()[0]; print(f'engine: {n:,} jobs'); assert n > 0"
+
+      - name: Pull triage from the site
+        if: steps.config.outputs.ready == 'true'
+        run: python jobs.py pull
+
+      - name: Poll
+        if: steps.config.outputs.ready == 'true'
+        id: ingest
+        run: |
+          set +e
+          python jobs.py ingest --workers 12 > "$RUNNER_TEMP/ingest.log" 2>&1
+          code=$?
+          grep -v '^  ' "$RUNNER_TEMP/ingest.log"
+          exit $code
+
+      - name: Score
+        if: steps.config.outputs.ready == 'true'
+        run: python jobs.py score --new --yes
+
+      - name: Push to the site
+        if: steps.config.outputs.ready == 'true'
+        run: python jobs.py push
+
+      # Even when the push failed: sync state only records what the site
+      # confirmed, so storing the engine now loses nothing and the next run
+      # sends the rest. Skipped when the poll itself failed.
+      - name: Strip and store engine
+        if: always() && steps.ingest.outcome == 'success' && steps.config.outputs.ready == 'true'
+        run: |
+          python jobs.py strip
+          python -c "import sqlite3; c = sqlite3.connect('data/jobs.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.execute('PRAGMA journal_mode=DELETE'); c.close()"
+          gzip -f data/jobs.db
+          ls -l data/jobs.db.gz | awk '{printf "engine: %.1f MB gzipped\n", $5/1e6}'
+          npx --yes "$VERCEL_CLI" blob put data/jobs.db.gz --pathname engine/jobs.db.gz \
+            --access private --allow-overwrite --multipart false \
+            --rw-token "$BLOB_READ_WRITE_TOKEN" --non-interactive > /dev/null
+          echo "engine stored"

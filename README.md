@@ -77,10 +77,11 @@ Then build your target list and do a first poll (about three minutes):
 
 ```
 jobs.py serve             local UI at http://127.0.0.1:8765   <- start here
+                          (polls on startup unless one ran in the last 30 min)
 jobs.py ingest            poll every source, dedup, run Tier-1
 jobs.py list              the ranked shortlist
 jobs.py show <id>         one posting in full
-jobs.py score             Tier-2 LLM ranking (needs an API key)
+jobs.py score             Tier-2 ranking, offline and free
 jobs.py sources           per-source health
 jobs.py rejects           what the filter killed, grouped by rule
 jobs.py stats             database summary
@@ -90,6 +91,10 @@ jobs.py probe lever acme  hit one endpoint and report what came back
 The UI is the main surface: the shortlist, the full posting, a **Run poll**
 button, and per-job triage (shortlist / applied / pass, plus notes). Triage
 writes to `jobs.status`, which the CLI reads back.
+
+Opening it polls in the background, unless one finished in the last 30 minutes.
+**New only** shows what was first seen in the last 24 hours, and clicking the
+**Age** column sorts newest first instead of by fit score.
 
 ### Run it on a schedule
 
@@ -105,7 +110,7 @@ timer is most of the value.
 Logs land in `data/logs/`. On macOS or Linux, use cron instead:
 
 ```
-0 */4 * * * cd /path/to/repo && .venv/bin/python jobs.py ingest && .venv/bin/python jobs.py score --new --quiet
+0 */4 * * * cd /path/to/repo && .venv/bin/python jobs.py ingest && .venv/bin/python jobs.py score
 ```
 
 ---
@@ -236,29 +241,39 @@ substring matches `canada`. Ambiguous city names are listed state-qualified
 
 ---
 
-## Tier-2 scoring (optional, costs money)
+## Tier-2 scoring (free, offline, no key)
 
 Ranks the shortlist 0-100 with a rationale, gaps, red flags, and which evidence
-to lead with. Needs an Anthropic API key:
+to lead with. No API key, no network, no cost.
 
 ```bash
-setx ANTHROPIC_API_KEY "sk-ant-..."     # Windows, then open a new terminal
-export ANTHROPIC_API_KEY="sk-ant-..."   # macOS/Linux
+jobs.py score              # score everything unranked
+jobs.py score --rescore    # redo the lot, e.g. after editing evidence.yaml
 ```
 
-```bash
-jobs.py score --dry-run    # cost estimate, submits nothing
-jobs.py score              # the backlog, via the Batch API at half price
-jobs.py score --new        # just the unscored, synchronously
-```
+Every poll scores what it finds, so the ranking never falls behind the list.
 
-Roughly **$0.30 for 300 postings** using Claude Haiku, and under a cent per poll
-after that. Once a key is set, every poll scores what it finds automatically.
+**How it decides.** Base 50, then signals: how many years the posting demands,
+what degree it requires, whether the title and body agree about the level, how
+far the work sits from the evidence in `profile/evidence.yaml`, and how much of
+your stack it names. Four rules are hard and override the arithmetic:
 
-Without a key everything else still works; scoring quietly no-ops. There is also
-a keyless path: `jobs.py score --export-manual out.json` writes the prompts, you
-or any assistant score them, and `--import-manual` reads them back.
-`jobs.py score --show-rubric` prints the rubric.
+- A posting requiring a security clearance scores under 20, always.
+- A row with no description text is capped at 60 and says so.
+- Go, Kotlin, Scala and production cloud deployment are always listed as gaps.
+- Only evidence ids that exist in `evidence.yaml` are ever cited.
+
+**How good is it?** Measured against 49 postings previously scored by Claude
+Haiku: **+0.73 rank correlation, 8.7 points mean absolute error, and it puts
+80% of them in the same half of the list.** Re-measure any time with
+`python scripts/calibrate_score.py`, which also prints the worst disagreements.
+It is a ranking, not a judgement. Read the posting before you apply.
+
+**If you would rather use the LLM**, `jobs.py score --llm` still drives the
+Anthropic Batch API (about $0.30 for 300 postings with Haiku, needs
+`ANTHROPIC_API_KEY`), and `--export-manual`/`--import-manual` still hand the
+prompts to any assistant and read the results back.
+`jobs.py score --show-rubric` prints the rubric both paths share.
 
 ---
 
@@ -278,7 +293,8 @@ src/jobpipe/
   ingest.py        parallel fetch, serial write, health check
   filters.py       Tier-1 rules
   apply.py         builds the fill packet
-  score.py         Tier-2 scoring
+  score.py         Tier-2 scoring via the Anthropic Batch API (opt-in)
+  offline_score.py the default scorer: deterministic, no key
   web.py           local server + JSON API
   ui/index.html    the whole UI, no build step
 scripts/           poll.ps1, install-task.ps1, debug_fill.py

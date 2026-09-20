@@ -28,3 +28,9 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+.vercel
+.env*
+
+# Staging folder built by scripts/deploy-site.ps1 (feature 20)
+site/
+site-seed/
